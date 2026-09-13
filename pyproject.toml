@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "snx"
+version = "0.1.0"
+description = "정비 서비스망 수요 예측 · 커버리지 갭 분석 · 신규 거점 입지 최적화"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "박수빈" }]
+dependencies = [
+    "pandas>=2.0",
+    "numpy>=1.24",
+    "pyyaml>=6.0",
+    "pydantic>=2.5",
+    "typer>=0.12",
+    "rich>=13.0",
+    "pulp>=2.8,<4.0",
+    "scikit-learn>=1.3",
+    "folium>=0.15",
+    "streamlit>=1.30",
+    "plotly>=5.18",
+]
+
+[project.optional-dependencies]
+agents = ["crewai>=0.60", "langchain-openai>=0.1", "python-dotenv>=1.0"]
+ml = ["lightgbm>=4.0"]
+dev = ["pytest>=7.4", "pytest-cov>=4.1", "ruff>=0.5"]
+
+[project.scripts]
+snx = "snx.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+snx = ["agents/prompts/*.yaml", "storage/*.sql"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

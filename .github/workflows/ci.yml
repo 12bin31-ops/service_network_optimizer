@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install -U pip
+          pip install -e ".[dev]"
+
+      - name: Lint
+        run: ruff check src app tests
+
+      - name: Test
+        run: pytest -q --cov=snx --cov-report=term-missing
+
+      - name: End-to-end pipeline
+        run: |
+          snx pipeline --source sample --p 10 --no-agent
+          test -f outputs/report.md
+          test -f outputs/gap_map.html
+          test -f outputs/siting_priority.csv
+
+      - name: Upload artifacts
+        if: matrix.python-version == '3.11'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-outputs
+          path: outputs/

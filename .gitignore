@@ -1,23 +1,33 @@
-### AL ###
-#Template for AL projects for Dynamics 365 Business Central
-#launch.json folder
-.vscode/
-#Cache folder
-.alcache/
-#Symbols folder
-.alpackages/
-#Snapshots folder
-.snapshots/
-#Testing Output folder
-.output/
-#Extension App-file
-*.app
-#Rapid Application Development File
-rad.json
-#Translation Base-file
-*.g.xlf
-#License-files
-*.bclicense
-*.flf
-#Test results file
-TestResults.xml
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+.venv/
+venv/
+env/
+
+.env
+.env.local
+
+# 데이터 산출물 — 원본은 재현 스크립트로 생성/수집
+data/raw/*
+data/interim/*
+data/processed/*
+!data/**/.gitkeep
+!data/reference/*.csv
+
+*.db
+*.sqlite3
+outputs/
+*.html
+!docs/*.html
+
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+.ipynb_checkpoints/
+.DS_Store

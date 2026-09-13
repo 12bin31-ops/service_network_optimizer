@@ -1,0 +1,80 @@
+# =============================================================================
+# 서비스망 갭 분석 파라미터
+# 모든 계수는 근거/출처를 주석으로 남기고, 민감도는 tests/test_demand.py 에서 확인
+# =============================================================================
+
+paths:
+  db: "data/processed/snx.db"
+  reference_dir: "data/reference"
+  raw_dir: "data/raw"
+  outputs_dir: "outputs"
+
+market:
+  # 국내 승용 등록대수 중 현대차 브랜드 점유 가정치 (사업계획용 시나리오 값)
+  hyundai_share: 0.38
+  # 전기차 비중 (전국 평균 가정, 지역별로 sample_generator 가 분산 적용)
+  ev_share: 0.09
+
+demand:
+  # 차령 버킷별 연간 정비 입고 횟수 (대/년) — 정기점검 + 경정비 + 사고수리 합산 가정
+  visits_per_vehicle_year:
+    "0-2": 1.6
+    "3-5": 1.9
+    "6-10": 2.3
+    "11+": 2.6
+  # 차령이 올라갈수록 공식 서비스망 대신 일반 정비소로 이탈 → 블루핸즈 유입 비율
+  official_network_loyalty:
+    "0-2": 0.85
+    "3-5": 0.62
+    "6-10": 0.38
+    "11+": 0.18
+  # 전기차는 소모품 정비 수요가 낮지만 고전압 정비는 하이테크센터로 집중
+  ev_visit_multiplier: 0.55
+  ev_hitech_ratio: 0.35
+
+capacity:
+  # 지점 1개 워크베이 기준 연간 처리 가능 건수
+  jobs_per_bay_day: 5.5
+  workdays_per_year: 290
+  # 부하율이 이 값을 넘으면 실질적으로 대기가 발생한다고 판단
+  healthy_utilization: 0.85
+
+coverage:
+  # 접근성 기준 (분). 국내 서비스망 기획에서 통용되는 '30분 상권' 기준
+  max_travel_minutes: 30
+  # 직선거리 → 실제 도로거리 보정 계수
+  detour_factor: 1.30
+  # 도시 등급별 평균 주행속도 (km/h)
+  avg_speed_kmh:
+    metro: 26
+    city: 38
+    rural: 52
+  # 복수 지점 접근 가능 시 수요 분배 모형 (Huff) 의 거리 민감도
+  huff_distance_decay: 1.4
+
+gap_score:
+  # 갭 스코어 가중치 (합 1.0)
+  weights:
+    uncovered_demand: 0.50   # 30분 내 도달 불가 수요
+    access_penalty: 0.25     # 최근접 지점까지 소요시간
+    load_penalty: 0.25       # 접근 가능 지점의 과부하 정도
+
+optimization:
+  # 신규 거점 개수 (예산 제약)
+  n_new_sites: 15
+  # 후보지 풀: 갭 스코어 상위 N개 시군구의 중심점
+  candidate_top_n: 60
+  # 신규 거점 표준 규모 (워크베이 수)
+  new_site_bays: 6
+  # 동일한 수요를 흡수하더라도 더 가까이서 흡수하는 배치를 선호하는 정도.
+  # 0 이면 순수 최대커버링, 값이 커질수록 접근성 개선을 함께 본다.
+  access_value_alpha: 0.35
+  solver_time_limit_sec: 120
+
+report:
+  # 에이전트 리포트를 생성할 상위 지역 수
+  top_n_regions: 5
+  language: "ko"
+
+logging:
+  level: "INFO"
