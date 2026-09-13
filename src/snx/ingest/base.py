@@ -12,6 +12,7 @@
 regions         : sigungu_code, sido, sigungu, lat, lon, urban_class, population
 vehicle_parc    : sigungu_code, age_bucket, vehicles, ev_vehicles, source
 service_centers : center_id, name, center_type, sigungu_code, lat, lon, bays, source
+center_voc      : center_id, period, voc_per_1k_jobs, comeback_rate, source   (선택)
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ CENTER_COLUMNS = [
     "bays",
     "source",
 ]
+VOC_COLUMNS = ["center_id", "period", "voc_per_1k_jobs", "comeback_rate", "source"]
 
 
 @dataclass(frozen=True)
@@ -41,6 +43,8 @@ class IngestResult:
     vehicle_parc: pd.DataFrame
     service_centers: pd.DataFrame
     mode: str
+    # 거점별 VOC · 재입고 실적. 없으면 품질 진단이 부하(대기) 축만으로 돈다.
+    center_voc: pd.DataFrame | None = None
 
     def validate(self) -> IngestResult:
         _require(self.regions, REGION_COLUMNS, "regions")
@@ -57,6 +61,15 @@ class IngestResult:
             raise ValueError("vehicle_parc.vehicles 에 음수가 있습니다")
         if (self.service_centers["bays"] <= 0).any():
             raise ValueError("service_centers.bays 는 1 이상이어야 합니다")
+        if self.center_voc is not None and not self.center_voc.empty:
+            _require(self.center_voc, VOC_COLUMNS, "center_voc")
+            orphan = set(self.center_voc["center_id"]) - set(self.service_centers["center_id"])
+            if orphan:
+                raise ValueError(
+                    f"service_centers 에 없는 거점이 center_voc 에 있습니다: {sorted(orphan)[:5]}"
+                )
+            if not self.center_voc["comeback_rate"].between(0, 1).all():
+                raise ValueError("center_voc.comeback_rate 는 0~1 비율이어야 합니다")
         return self
 
 

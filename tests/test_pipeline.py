@@ -9,7 +9,10 @@ from snx.viz.maps import save_gap_map
 
 
 def test_all_tables_populated(settings, pipeline_run):
-    for table in ("regions", "vehicle_parc", "service_centers", "demand", "coverage", "gap_scores"):
+    for table in (
+        "regions", "vehicle_parc", "service_centers", "center_voc", "demand", "coverage",
+        "gap_scores", "center_quality", "siting_runs", "plan_runs", "plan_actions",
+    ):
         assert row_count(settings.db_path, table) > 0, f"{table} 이 비어 있습니다"
 
 

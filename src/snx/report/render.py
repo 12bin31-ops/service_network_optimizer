@@ -13,7 +13,7 @@ import pandas as pd
 
 from snx.config import Settings
 from snx.report.context import build_analysis_context
-from snx.storage.db import get_conn, read_sql
+from snx.storage.db import get_conn, read_sql, read_table, table_exists
 
 
 def render_template_report(settings: Settings, ctx: pd.DataFrame | None = None) -> str:
@@ -31,7 +31,7 @@ def render_template_report(settings: Settings, ctx: pd.DataFrame | None = None) 
     )
 
     lines: list[str] = []
-    lines.append("# 정비 서비스망 커버리지 갭 진단")
+    lines.append("# 정비 서비스망 진단 — Service Network Optimizer")
     lines.append("")
     lines.append(f"_생성일시: {datetime.now(timezone.utc).astimezone().strftime('%Y-%m-%d %H:%M')}_")
     lines.append("")
@@ -45,6 +45,12 @@ def render_template_report(settings: Settings, ctx: pd.DataFrame | None = None) 
     lines.append(
         f"- 건전 부하율({settings.capacity.healthy_utilization:.0%}) 초과 상권: **{overloaded}곳**"
     )
+    if "warranty_visits" in ctx.columns:
+        warranty = float(ctx["warranty_visits"].fillna(0).sum())
+        lines.append(
+            f"- 보증수리(무상) 입고: **{warranty:,.0f}건 ({100 * warranty / max(total_demand, 1):.1f}%)** "
+            "— 나머지는 유상 정비"
+        )
     lines.append("")
 
     lines.append(f"## 2. 갭 상위 {top_n}개 지역")
@@ -137,18 +143,205 @@ def render_template_report(settings: Settings, ctx: pd.DataFrame | None = None) 
                 lines.append(f"- **{r.sido} {r.sigungu}** (갭 {int(r.gap_rank)}위): {why}")
             lines.append("")
 
-    lines.append("## 4. 가정과 한계")
+    lines.extend(_quality_section(settings))
+    lines.extend(_investment_section(settings))
+    lines.extend(_policy_section(settings))
+
+    lines.append("## 7. 가정과 한계")
     lines.append("")
     lines.append(
         "- 소요시간은 직선거리에 우회계수와 도시등급별 평균속도를 적용한 근사치다. "
         "실제 라우팅 API 로 교체하면 산악 지형 지역의 접근성이 더 나쁘게 나올 가능성이 크다."
     )
     lines.append(
-        "- 차령별 정비 원단위와 공식망 유입률은 시나리오 가정값이다. "
+        "- 차령별 정비 원단위 · 공식망 유입률 · 보증수리 비중은 시나리오 가정값이다. "
         "실적 데이터로 교체하면 절대 수준은 바뀌지만 지역 간 상대 순위는 유지되는 구조다."
+    )
+    lines.append(
+        "- 신설 · 증설 단가는 부지비를 제외한 가정값이다. 단가 비율이 바뀌면 최적 조합이 달라지므로 "
+        "`snx plan --budget` 과 `config/settings.yaml` 의 investment 절로 민감도를 확인할 것."
     )
     lines.append("")
     return "\n".join(lines)
+
+
+def _quality_section(settings: Settings) -> list[str]:
+    from snx.quality.scorecard import (
+        ISSUE_OPERATION,
+        ISSUE_OVERLOAD,
+        ISSUE_WAIT,
+        PRESCRIPTIONS,
+        load_complaint_correlation,
+    )
+
+    db = settings.db_path
+    if not table_exists(db, "center_quality"):
+        return []
+    quality = read_table(db, "center_quality")
+    if quality.empty:
+        return []
+    centers = read_table(db, "service_centers")[["center_id", "name"]]
+    quality = quality.merge(centers, on="center_id", how="left")
+    counts = quality["issue_type"].value_counts()
+
+    lines = ["## 4. 거점 품질 진단 (부하 · VOC · 재입고)", ""]
+    lines.append(
+        f"- 진단 거점 {len(quality)}곳 — **과부하형 품질저하 {counts.get(ISSUE_OVERLOAD, 0)}곳** · "
+        f"**운영형 품질저하 {counts.get(ISSUE_OPERATION, 0)}곳** · 대기 리스크 {counts.get(ISSUE_WAIT, 0)}곳"
+    )
+    rho = load_complaint_correlation(quality)
+    if rho is not None:
+        lines.append(
+            f"- 부하율과 VOC 의 순위상관 **{rho:.2f}** — 용량 부족이 고객 불만으로 번지는 구조가 "
+            + ("확인된다. 증설 투자는 곧 품질 투자다." if rho >= 0.2 else "약하다. 불만의 주원인은 운영 쪽이다.")
+        )
+    lines.append(
+        "- 같은 '불만 많은 거점'이라도 처방이 다르다: 과부하형은 워크베이 증설 · 예약 분산(투자), "
+        "운영형은 정비 품질 점검 · 기술 교육(운영)."
+    )
+    lines.append("")
+
+    for issue, title in ((ISSUE_OVERLOAD, "과부하형"), (ISSUE_OPERATION, "운영형")):
+        sub = quality[quality["issue_type"] == issue].sort_values("quality_risk", ascending=False).head(5)
+        if sub.empty:
+            continue
+        lines.append(f"**{title} 상위 거점** → {PRESCRIPTIONS[issue]}")
+        lines.append("")
+        lines.append("| 거점 | 등급 | 리스크 | 부하율 | 대기(일) | VOC/천건 | 재입고율 |")
+        lines.append("|---|:-:|---:|---:|---:|---:|---:|")
+        for r in sub.itertuples(index=False):
+            lines.append(
+                f"| {r.name} | {r.quality_grade} | {r.quality_risk:.0f} | {r.utilization:.0%} | "
+                f"{r.est_wait_days:.1f} | {_n(r.voc_per_1k_jobs, 1)} | "
+                f"{'-' if pd.isna(r.comeback_rate) else f'{r.comeback_rate:.1%}'} |"
+            )
+        lines.append("")
+    return lines
+
+
+def _investment_section(settings: Settings) -> list[str]:
+    from snx.optimize.network_plan import budget_sensitivity
+
+    db = settings.db_path
+    runs = read_sql(db, "SELECT * FROM plan_runs ORDER BY created_at DESC LIMIT 1") if table_exists(
+        db, "plan_runs"
+    ) else pd.DataFrame()
+    if runs.empty:
+        return []
+    run = runs.iloc[0]
+    inv = settings.investment
+    unit = inv.cost_unit
+    base = max(float(run["baseline_unmet"]), 1.0)
+
+    lines = ["## 5. 신설 + 증설 투자안 (예산 제약 동시 최적화)", ""]
+    lines.append(
+        f"가정: 신규 거점(6베이) {inv.new_site_cost:,.0f}{unit} · 워크베이 증설 {inv.bay_expansion_cost:,.1f}{unit}/베이 "
+        f"· 거점당 최대 +{inv.max_added_bays_per_center}베이"
+    )
+    lines.append("")
+    lines.append(f"| 예산 {float(run['budget']):,.0f}{unit} | 흡수 수요 | 해소율 |")
+    lines.append("|---|---:|---:|")
+    for name, value in (
+        ("신설만", run["new_only_value"]),
+        ("증설만", run["expand_only_value"]),
+        ("**신설 + 증설 최적 조합**", run["objective_value"]),
+    ):
+        lines.append(f"| {name} | {float(value):,.0f} | {100 * float(value) / base:.1f}% |")
+    lines.append("")
+
+    uplift = float(run["objective_value"]) / max(float(run["new_only_value"]), 1.0)
+    lines.append(
+        f"- 최적 조합은 신설 **{int(run['n_new_sites'])}개소** · 증설 **{int(run['n_expansions'])}곳"
+        f"(+{int(run['added_bays'])}베이)** — 같은 예산을 신설에만 쓸 때보다 **{uplift:.2f}배** 흡수한다."
+    )
+    if int(run["n_new_sites"]) == 0:
+        lines.append(
+            "- 이 예산 규모에서는 신설이 한 곳도 선택되지 않는다. 현재 미충족의 대부분이 "
+            "'거점은 닿지만 붐비는' 용량 갭이라, 베이당 단가가 낮은 증설이 먼저 소진된다."
+        )
+
+    sens = budget_sensitivity(settings, multipliers=(0.5, 1.0, 2.0))
+    if not sens.empty:
+        ceiling = float(sens.attrs.get("expand_ceiling", 0.0))
+        lines.append("")
+        lines.append("| 예산 | 신설 | 증설(베이) | 흡수 수요 | 신설만 대비 |")
+        lines.append("|---:|---:|---:|---:|---:|")
+        for r in sens.itertuples(index=False):
+            lines.append(
+                f"| {r.budget:,.0f}{unit} | {r.n_new_sites} | {r.n_expansions}({r.added_bays}) | "
+                f"{r.objective_value:,.0f} | {r.uplift:.2f}배 |"
+            )
+        if ceiling > 0:
+            lines.append("")
+            lines.append(
+                f"- 증설만으로 해소 가능한 상한은 **{ceiling:,.0f}건(미충족의 {100 * ceiling / base:.1f}%)** 이다. "
+                "나머지는 30분 밖 수요이거나 증설 한도를 넘는 집중 과부하라 신설로만 풀린다 — "
+                "예산이 커질수록 신설 비중이 올라가는 이유다."
+            )
+
+    actions = read_sql(
+        db,
+        """
+        SELECT pa.priority, pa.action, pa.target_id, pa.added_bays, pa.cost, pa.captured_visits,
+               r.sido, r.sigungu, sc.name
+        FROM plan_actions pa
+        JOIN regions r ON r.sigungu_code = pa.sigungu_code
+        LEFT JOIN service_centers sc ON sc.center_id = pa.target_id
+        WHERE pa.run_id = ? ORDER BY pa.captured_visits DESC LIMIT 8
+        """,
+        (run["run_id"],),
+    )
+    if not actions.empty:
+        lines.append("")
+        lines.append("**흡수량 상위 조치**")
+        lines.append("")
+        lines.append("| 조치 | 대상 | 베이 | 투자 | 흡수 수요 |")
+        lines.append("|---|---|---:|---:|---:|")
+        for r in actions.itertuples(index=False):
+            label = "신설" if r.action == "new" else "증설"
+            target = f"{r.sido} {r.sigungu}" if r.action == "new" else f"{r.name}"
+            lines.append(
+                f"| {label} | {target} | +{int(r.added_bays)} | {r.cost:,.1f}{unit} | {r.captured_visits:,.0f} |"
+            )
+    lines.append("")
+    return lines
+
+
+def _policy_section(settings: Settings) -> list[str]:
+    from snx.policy.scenario import simulate_loyalty
+
+    ps = settings.policy_scenario
+    if not ps.loyalty_overrides:
+        return []
+    try:
+        result = simulate_loyalty(settings, ps.loyalty_overrides, ps.label)
+    except RuntimeError:
+        return []
+    sm = result.summary
+
+    lines = ["## 6. 서비스 정책 시나리오", ""]
+    lines.append(f"**{ps.label or ps.loyalty_overrides}**")
+    lines.append("")
+    lines.append(
+        f"- 연간 입고 **+{sm['delta_visits']:,.0f}건** (보증수리 +{sm['delta_warranty_visits']:,.0f}건) — "
+        f"그중 **{sm['leak_ratio']:.0%}({sm['delta_unmet']:,.0f}건)** 는 서비스망이 받지 못해 대기 · 이탈로 샌다"
+    )
+    lines.append(
+        f"- 건전 부하율 초과 상권 {sm['overloaded_regions_base']}곳 → **{sm['overloaded_regions_scenario']}곳**"
+    )
+    lines.append(
+        "- 유입률을 올리는 정책은 네트워크 증설 계획과 한 세트로 짜야 한다. "
+        "정책 효과의 절반이 거점 용량에서 막히면 고객 경험은 오히려 나빠진다."
+    )
+    lines.append("")
+    lines.append("| 지역 | 입고 증가 | 미충족 증가 | 누수율 |")
+    lines.append("|---|---:|---:|---:|")
+    for r in result.regions.head(5).itertuples(index=False):
+        lines.append(
+            f"| {r.sido} {r.sigungu} | {r.delta_visits:,.0f} | {r.delta_unmet:,.0f} | {r.leak_ratio:.0%} |"
+        )
+    lines.append("")
+    return lines
 
 
 def save_report(

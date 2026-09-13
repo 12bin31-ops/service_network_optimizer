@@ -17,6 +17,11 @@ data/raw/service_centers.csv
     브랜드 공식 서비스망 안내 페이지에서 정리하거나, 사내 네트워크 마스터를 사용
     기대 컬럼: center_id, name, center_type, sigungu_code, lat, lon, bays
 
+data/raw/center_voc.csv                                              (선택)
+    거점별 VOC · 재입고율 반기 집계 — VOC 관리 시스템 · 정비 이력(DMS) 에서 추출
+    기대 컬럼: center_id, period, voc_per_1k_jobs, comeback_rate
+    없으면 품질 진단은 부하율(대기일수) 축만으로 계산한다.
+
 data/reference/sigungu.csv
     시군구 코드 · 중심좌표 · 도시등급 · 인구 (저장소에 동봉)
     행정구역 경계는 SGIS, 인구는 KOSIS 주민등록인구 기준으로 갱신
@@ -33,6 +38,7 @@ from snx.config import AGE_BUCKETS, Settings
 from snx.ingest.base import (
     CENTER_COLUMNS,
     PARC_COLUMNS,
+    VOC_COLUMNS,
     IngestResult,
     MissingSourceFile,
     load_reference_regions,
@@ -40,6 +46,7 @@ from snx.ingest.base import (
 
 VEHICLE_FILE = "vehicle_registration.csv"
 CENTER_FILE = "service_centers.csv"
+VOC_FILE = "center_voc.csv"
 
 
 def load(settings: Settings) -> IngestResult:
@@ -51,12 +58,16 @@ def load(settings: Settings) -> IngestResult:
     valid = set(regions["sigungu_code"])
     parc = parc[parc["sigungu_code"].isin(valid)].copy()
     centers = centers[centers["sigungu_code"].isin(valid)].copy()
+    voc = _load_voc(settings.raw_dir)
+    if voc is not None:
+        voc = voc[voc["center_id"].isin(set(centers["center_id"]))].copy()
 
     return IngestResult(
         regions=regions,
         vehicle_parc=parc,
         service_centers=centers,
         mode="live",
+        center_voc=voc,
     ).validate()
 
 
@@ -105,3 +116,21 @@ def _load_centers(raw_dir: Path) -> pd.DataFrame:
         df["bays"] = 5
     df["source"] = "network_master"
     return df[CENTER_COLUMNS]
+
+
+def _load_voc(raw_dir: Path) -> pd.DataFrame | None:
+    """선택 파일 — 없으면 None (품질 진단이 부하 축만 사용)."""
+    path = Path(raw_dir) / VOC_FILE
+    if not path.exists():
+        return None
+    df = pd.read_csv(path, dtype={"center_id": str})
+    missing = {"center_id", "voc_per_1k_jobs", "comeback_rate"} - set(df.columns)
+    if missing:
+        raise ValueError(f"{path} 에 필수 컬럼이 없습니다: {sorted(missing)}")
+    if "period" not in df.columns:
+        df["period"] = "unknown"
+    # 재입고율을 % 로 넣은 경우를 비율로 환산
+    if df["comeback_rate"].max() > 1:
+        df["comeback_rate"] = df["comeback_rate"] / 100.0
+    df["source"] = "voc_system"
+    return df[VOC_COLUMNS]

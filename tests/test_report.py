@@ -25,7 +25,7 @@ def test_region_brief_known_and_unknown(settings, pipeline_run):
 
 def test_template_report_contains_sections(settings, pipeline_run):
     md = render_template_report(settings)
-    for heading in ("전국 요약", "갭 유형 판정", "가정과 한계"):
+    for heading in ("전국 요약", "갭 유형 판정", "거점 품질 진단", "신설 + 증설 투자안", "정책 시나리오", "가정과 한계"):
         assert heading in md
     assert len(md) > 500
 
@@ -35,6 +35,9 @@ def test_agent_tools_return_valid_json(settings, pipeline_run):
         T.national_summary(settings),
         T.top_gap_regions(3, settings),
         T.siting_plan(settings),
+        T.quality_watchlist(5, settings),
+        T.investment_plan(settings),
+        T.policy_scenario(settings),
         T.methodology_notes(settings),
     ):
         json.loads(payload)

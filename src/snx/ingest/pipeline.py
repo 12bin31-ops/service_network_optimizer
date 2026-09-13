@@ -13,11 +13,15 @@ log = get_logger(__name__)
 # 외래키 역순 — regions 를 다시 쓰기 전에 비워야 하는 하류 테이블
 DOWNSTREAM_TABLES = (
     "reports",
+    "plan_actions",
+    "plan_runs",
     "siting_results",
     "siting_runs",
+    "center_quality",
     "gap_scores",
     "coverage",
     "demand",
+    "center_voc",
     "service_centers",
     "vehicle_parc",
 )
@@ -43,14 +47,18 @@ def ingest(settings: Settings, source: str = "sample", seed: int = 20260914) -> 
         n_regions = write_df(conn, result.regions, "regions")
         n_parc = write_df(conn, result.vehicle_parc, "vehicle_parc")
         n_centers = write_df(conn, result.service_centers, "service_centers")
+        n_voc = 0
+        if result.center_voc is not None and not result.center_voc.empty:
+            n_voc = write_df(conn, result.center_voc, "center_voc")
 
     total_vehicles = result.vehicle_parc["vehicles"].sum()
     log.info(
-        "수집 완료 [%s] — 지역 %d개 · 차량모수 %d행(%.0f대) · 서비스거점 %d개",
+        "수집 완료 [%s] — 지역 %d개 · 차량모수 %d행(%.0f대) · 서비스거점 %d개 · VOC %d건",
         result.mode,
         n_regions,
         n_parc,
         total_vehicles,
         n_centers,
+        n_voc,
     )
     return result

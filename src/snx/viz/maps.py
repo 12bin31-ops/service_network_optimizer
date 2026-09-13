@@ -1,4 +1,4 @@
-"""지도 시각화 — 갭 · 기존 거점 · 신규 거점 후보를 한 장에 올린다."""
+"""지도 시각화 — 갭 · 기존 거점(품질 등급) · 신규 거점 · 증설 대상을 한 장에 올린다."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import pandas as pd
 
 from snx.config import Settings
 from snx.report.context import build_analysis_context
-from snx.storage.db import read_table
+from snx.storage.db import read_sql, read_table, table_exists
 
 KOREA_CENTER = (36.4, 127.9)
 
@@ -20,6 +20,9 @@ GAP_COLORS = [
 ]
 
 
+GRADE_COLORS = {"A": "#1d4ed8", "B": "#0891b2", "C": "#d97706", "D": "#b91c1c"}
+
+
 def gap_color(score: float) -> str:
     for threshold, color in GAP_COLORS:
         if score >= threshold:
@@ -30,12 +33,21 @@ def gap_color(score: float) -> str:
 def build_gap_map(settings: Settings, ctx: pd.DataFrame | None = None) -> folium.Map:
     ctx = build_analysis_context(settings) if ctx is None else ctx
     centers = read_table(settings.db_path, "service_centers")
+    if table_exists(settings.db_path, "center_quality"):
+        quality = read_table(settings.db_path, "center_quality")
+        if not quality.empty:
+            centers = centers.merge(
+                quality[["center_id", "quality_grade", "issue_type", "utilization", "voc_per_1k_jobs"]],
+                on="center_id",
+                how="left",
+            )
 
     fmap = folium.Map(location=KOREA_CENTER, zoom_start=7, tiles="OpenStreetMap")
 
     layer_gap = folium.FeatureGroup(name="갭 스코어 (시군구)", show=True)
-    layer_centers = folium.FeatureGroup(name="기존 서비스 거점", show=True)
+    layer_centers = folium.FeatureGroup(name="기존 서비스 거점 (색 = 품질 등급)", show=True)
     layer_new = folium.FeatureGroup(name="신규 거점 우선순위", show=True)
+    layer_expand = folium.FeatureGroup(name="증설 대상 거점 (투자안)", show=False)
 
     max_unmet = max(float(ctx["unmet_visits"].fillna(0).max()), 1.0)
     for r in ctx.itertuples(index=False):
@@ -62,16 +74,23 @@ def build_gap_map(settings: Settings, ctx: pd.DataFrame | None = None) -> folium
             tooltip=f"{r.sigungu} · 갭 {score:.0f}",
         ).add_to(layer_gap)
 
-    for c in centers.itertuples(index=False):
-        is_hitech = c.center_type == "hitech"
+    for c in centers.to_dict(orient="records"):
+        is_hitech = c["center_type"] == "hitech"
+        grade = c.get("quality_grade")
+        color = GRADE_COLORS.get(grade, "#1d4ed8" if not is_hitech else "#0f766e")
+        tip = f"{c['name']} (베이 {c['bays']})"
+        if isinstance(grade, str):
+            tip += f" · 품질 {grade} · 부하 {c['utilization']:.0%}"
+            if c.get("issue_type") and c["issue_type"] != "정상":
+                tip += f" · {c['issue_type']}"
         folium.CircleMarker(
-            location=(c.lat, c.lon),
+            location=(c["lat"], c["lon"]),
             radius=4 if not is_hitech else 6,
-            color="#1d4ed8" if not is_hitech else "#0f766e",
+            color=color,
             fill=True,
             fill_opacity=0.9,
-            weight=0,
-            tooltip=f"{c.name} (베이 {c.bays})",
+            weight=0 if not is_hitech else 2,
+            tooltip=tip,
         ).add_to(layer_centers)
 
     picked = ctx[ctx["priority"].notna()].sort_values("priority")
@@ -83,7 +102,30 @@ def build_gap_map(settings: Settings, ctx: pd.DataFrame | None = None) -> folium
             f"(흡수 {float(r.captured_visits or 0):,.0f}건)",
         ).add_to(layer_new)
 
-    for layer in (layer_gap, layer_centers, layer_new):
+    if table_exists(settings.db_path, "plan_actions"):
+        expands = read_sql(
+            settings.db_path,
+            """
+            SELECT pa.target_id, pa.added_bays, pa.captured_visits, sc.name, sc.lat, sc.lon
+            FROM plan_actions pa
+            JOIN service_centers sc ON sc.center_id = pa.target_id
+            WHERE pa.action = 'expand'
+              AND pa.run_id = (SELECT run_id FROM plan_runs ORDER BY created_at DESC LIMIT 1)
+            """,
+        )
+        for r in expands.itertuples(index=False):
+            folium.RegularPolygonMarker(
+                location=(r.lat, r.lon),
+                number_of_sides=4,
+                radius=5 + 2 * int(r.added_bays),
+                color="#7c3aed",
+                fill=True,
+                fill_opacity=0.35,
+                weight=1.5,
+                tooltip=f"증설 +{int(r.added_bays)}베이 · {r.name} (흡수 {r.captured_visits:,.0f}건)",
+            ).add_to(layer_expand)
+
+    for layer in (layer_gap, layer_centers, layer_new, layer_expand):
         layer.add_to(fmap)
     folium.LayerControl(collapsed=False).add_to(fmap)
     _add_legend(fmap)
@@ -103,6 +145,9 @@ def _add_legend(fmap: folium.Map) -> None:
       <div><span style="display:inline-block;width:10px;height:10px;background:#f59e0b;border-radius:50%"></span> 30–45</div>
       <div><span style="display:inline-block;width:10px;height:10px;background:#94a3b8;border-radius:50%"></span> 30 미만</div>
       <div style="margin-top:6px; color:#64748b;">원 크기 = 미충족 수요</div>
+      <div style="font-weight:600; margin:8px 0 4px;">거점 품질 등급</div>
+      <div><span style="color:#1d4ed8">●</span> A <span style="color:#0891b2">●</span> B
+           <span style="color:#d97706">●</span> C <span style="color:#b91c1c">●</span> D</div>
     </div>
     """
     fmap.get_root().html.add_child(folium.Element(html))

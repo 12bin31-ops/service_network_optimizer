@@ -24,14 +24,20 @@ def ingested(settings):
 def pipeline_run(settings, ingested):
     from snx.coverage.gap import run_coverage_stage
     from snx.demand.model import run_demand_stage
+    from snx.optimize.network_plan import run_plan_stage
     from snx.optimize.siting import run_siting_stage
+    from snx.quality.scorecard import run_quality_stage
 
     demand = run_demand_stage(settings)
     coverage, gaps = run_coverage_stage(settings)
+    quality = run_quality_stage(settings)
     solution = run_siting_stage(settings, n_new_sites=10)
+    plan = run_plan_stage(settings, budget=300)
     return {
         "demand": demand,
         "coverage": coverage,
         "gaps": gaps,
+        "quality": quality,
         "solution": solution,
+        "plan": plan,
     }

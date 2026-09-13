@@ -38,6 +38,9 @@ jobs:
           test -f outputs/report.md
           test -f outputs/gap_map.html
           test -f outputs/siting_priority.csv
+          test -f outputs/investment_plan.csv
+          test -f outputs/center_quality.csv
+          snx scenario --loyalty 6-10=0.50
 
       - name: Upload artifacts
         if: matrix.python-version == '3.11'

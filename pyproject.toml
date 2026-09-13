@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "snx"
-version = "0.1.0"
-description = "정비 서비스망 수요 예측 · 커버리지 갭 분석 · 신규 거점 입지 최적화"
+name = "service-network-optimizer"
+version = "0.2.0"
+description = "Service Network Optimizer — 정비 수요 예측 · 커버리지 갭 · 거점 품질 · 신설/증설 투자 최적화"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -49,3 +49,7 @@ ignore = ["E501"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+filterwarnings = [
+    # PuLP 3.x 가 4.0 API 이행을 예고하는 경고 — 동작에는 영향 없음 (의존성 <4.0 고정)
+    "ignore::DeprecationWarning:pulp.*",
+]

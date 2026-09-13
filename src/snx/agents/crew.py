@@ -70,6 +70,21 @@ def _build_tools(settings: Settings) -> list:
         """최신 신규 거점 입지 최적화 결과와 우선순위를 조회한다."""
         return T.siting_plan(settings)
 
+    @tool("quality_watchlist")
+    def quality_watchlist_tool(n: int = 10) -> str:
+        """품질 관리 대상 거점(과부하형 · 운영형), 부하율-VOC 상관, 원인별 처방을 조회한다."""
+        return T.quality_watchlist(n, settings)
+
+    @tool("investment_plan")
+    def investment_plan_tool() -> str:
+        """같은 예산에서 신설만 · 증설만 · 최적 조합의 흡수 수요 비교와 상위 조치를 조회한다."""
+        return T.investment_plan(settings)
+
+    @tool("policy_scenario")
+    def policy_scenario_tool() -> str:
+        """공식망 유입률을 올리는 서비스 정책이 거점 부하와 미충족 수요에 주는 영향을 조회한다."""
+        return T.policy_scenario(settings)
+
     @tool("methodology_notes")
     def methodology_tool() -> str:
         """분석에 사용한 모형 · 계수 · 한계를 조회한다."""
@@ -80,6 +95,9 @@ def _build_tools(settings: Settings) -> list:
         top_gap_regions_tool,
         region_detail_tool,
         siting_plan_tool,
+        quality_watchlist_tool,
+        investment_plan_tool,
+        policy_scenario_tool,
         methodology_tool,
     ]
 

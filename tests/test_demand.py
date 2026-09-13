@@ -56,3 +56,23 @@ def test_stage_totals_are_positive(pipeline_run):
     demand = pipeline_run["demand"]
     assert (demand["annual_visits"] > 0).all()
     assert demand["annual_visits"].sum() > demand["ev_visits"].sum()
+
+
+def test_warranty_split_matches_closed_form(settings):
+    w = settings.demand.warranty_share
+    out = estimate_demand(_parc(1000, "3-5", ev=200), settings).loc[0]
+    expected = out["ice_visits"] * w.ice["3-5"] + out["ev_visits"] * w.ev["3-5"]
+    assert out["warranty_visits"] == pytest.approx(expected, abs=0.2)
+    assert out["warranty_visits"] + out["paid_visits"] == pytest.approx(out["annual_visits"], abs=0.2)
+
+
+def test_aged_fleet_has_no_warranty(settings):
+    out = estimate_demand(_parc(1000, "11+", ev=100), settings).loc[0]
+    assert out["warranty_visits"] == pytest.approx(0.0, abs=1e-9)
+
+
+def test_ev_battery_warranty_outlives_ice(settings):
+    """배터리 보증이 길어 6-10 버킷에서도 전기차는 보증 비중이 남는다."""
+    ice = estimate_demand(_parc(1000, "6-10", ev=0), settings).loc[0]
+    ev = estimate_demand(_parc(1000, "6-10", ev=1000), settings).loc[0]
+    assert ev["warranty_visits"] / ev["annual_visits"] > ice["warranty_visits"] / ice["annual_visits"]

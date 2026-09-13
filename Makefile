@@ -1,4 +1,4 @@
-.PHONY: setup demo pipeline dashboard test lint clean
+.PHONY: setup setup-full demo pipeline plan scenario dashboard test lint clean
 
 PY ?= python
 
@@ -15,6 +15,12 @@ demo: pipeline
 
 pipeline:
 	snx pipeline --source sample --p 15
+
+plan:
+	snx plan --budget 900
+
+scenario:
+	snx scenario --loyalty 6-10=0.50 --loyalty 11+=0.25
 
 dashboard:
 	streamlit run app/dashboard.py

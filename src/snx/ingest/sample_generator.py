@@ -9,6 +9,9 @@
 3) 전기차 보급률은 대도시/제주에 편중된다
 4) 서비스망은 '과거의 판매량'을 따라 깔려 있어, 인구는 적지만 노후 차량이
    많은 지역에서 체계적으로 과소 배치된다  ← 갭의 원천
+5) 거점 VOC · 재입고율은 두 원인에서 나온다 — 거점이 붐비면 대기 · 서두른 작업으로
+   불만이 오르고(부하형), 부하와 무관하게 운영 역량이 낮은 거점도 섞여 있다(운영형)
+   ← 품질 진단이 두 원인을 분리해 내야 하는 이유
 
 시드를 고정하므로 누구나 같은 결과를 재현할 수 있다.
 """
@@ -19,7 +22,14 @@ import numpy as np
 import pandas as pd
 
 from snx.config import AGE_BUCKETS, Settings
-from snx.ingest.base import CENTER_COLUMNS, PARC_COLUMNS, IngestResult, load_reference_regions
+from snx.coverage.distance import haversine_matrix
+from snx.ingest.base import (
+    CENTER_COLUMNS,
+    PARC_COLUMNS,
+    VOC_COLUMNS,
+    IngestResult,
+    load_reference_regions,
+)
 
 # 1) 도시등급별 인구 1인당 승용차 보유대수
 MOTORIZATION = {"metro": 0.34, "city": 0.44, "rural": 0.52}
@@ -44,6 +54,15 @@ BAY_CHOICES = {"metro": (4, 6, 8), "city": (4, 6, 8), "rural": (3, 4, 6)}
 # 하이테크센터(고전압 · 사고수리 거점)는 광역 단위로만 존재
 HITECH_SIDOS = {"서울", "경기", "인천", "부산", "대구", "광주", "대전", "울산", "충남", "경남"}
 
+# 5) 거점 품질 — 정비 1천 건당 VOC(불만 접수) 기준값과 재입고율(30일 내 동일 증상 재방문)
+VOC_BASE_PER_1K = 1.8
+COMEBACK_BASE = 0.025
+# 부하와 무관하게 운영 역량이 낮은 거점 비율과 그 거점의 악화 배수
+WEAK_OPERATOR_SHARE = 0.07
+WEAK_OPERATOR_VOC_X = 1.9
+WEAK_OPERATOR_COMEBACK_X = 2.2
+VOC_PERIOD = "2026H1"
+
 
 def generate(settings: Settings, seed: int = 20260914) -> IngestResult:
     rng = np.random.default_rng(seed)
@@ -51,12 +70,15 @@ def generate(settings: Settings, seed: int = 20260914) -> IngestResult:
 
     parc = _build_parc(regions, settings, rng)
     centers = _build_centers(regions, parc, rng)
+    # 모수 · 거점 난수 소비가 끝난 뒤에 뽑는다 — VOC 규칙을 바꿔도 거점망은 그대로다
+    voc = _build_voc(regions, centers, parc, rng)
 
     return IngestResult(
         regions=regions,
         vehicle_parc=parc,
         service_centers=centers,
         mode="sample",
+        center_voc=voc,
     ).validate()
 
 
@@ -146,6 +168,60 @@ def _build_centers(
             )
 
     return pd.DataFrame(rows, columns=CENTER_COLUMNS)
+
+
+# ---------------------------------------------------------------------------
+# 거점 VOC · 재입고
+# ---------------------------------------------------------------------------
+def _build_voc(
+    regions: pd.DataFrame, centers: pd.DataFrame, parc: pd.DataFrame, rng: np.random.Generator
+) -> pd.DataFrame:
+    """거점별 '워크베이당 보유대수' 를 부하 대리변수로 삼아 VOC 를 만든다.
+
+    실제 부하율은 수요 추정 · Huff 배정 이후에야 나오므로 수집 단계에서는 쓸 수 없다.
+    대신 지역 보유대수를 반경 30km 안의 거점에 '워크베이 × 거리감쇠' 비례로 나눠
+    거점별 워크베이당 차량 수를 근사한다. 수요 원단위 · 유입률을 모르는 근사라
+    실제 부하율과의 상관은 불완전하다 — 품질 진단은 이 잡음 속에서 원인을 분리해야 한다.
+    """
+    if centers.empty:
+        return pd.DataFrame(columns=VOC_COLUMNS)
+
+    vehicles = (
+        parc.groupby("sigungu_code")["vehicles"].sum().reindex(regions["sigungu_code"]).fillna(0.0)
+    )
+    km = haversine_matrix(
+        regions["lat"].to_numpy(), regions["lon"].to_numpy(),
+        centers["lat"].to_numpy(), centers["lon"].to_numpy(),
+    )
+    bays_j = centers["bays"].to_numpy(dtype=float)
+    pull = np.where(km <= 30.0, bays_j[None, :] * np.maximum(km, 3.0) ** -2.0, 0.0)
+    share = np.divide(pull, pull.sum(axis=1, keepdims=True), out=np.zeros_like(pull),
+                      where=pull.sum(axis=1, keepdims=True) > 0)
+    per_bay = (share * vehicles.to_numpy()[:, None]).sum(axis=0) / bays_j
+    relative = np.clip(per_bay / np.median(per_bay[per_bay > 0]), 0.0, 4.0)
+
+    excess = np.clip(relative - 1.0, 0.0, None)
+    n = len(centers)
+    weak = rng.random(n) < WEAK_OPERATOR_SHARE
+    hitech = (centers["center_type"] == "hitech").to_numpy()
+
+    voc = VOC_BASE_PER_1K * (1.0 + 0.9 * excess) * rng.lognormal(0.0, 0.25, n)
+    voc = np.where(weak, voc * WEAK_OPERATOR_VOC_X, voc)
+    voc = np.where(hitech, voc * 0.8, voc)  # 직영 · 전문 인력 — 기준 불만율이 낮다
+
+    comeback = COMEBACK_BASE * (1.0 + 0.5 * excess) * rng.lognormal(0.0, 0.20, n)
+    comeback = np.where(weak, comeback * WEAK_OPERATOR_COMEBACK_X, comeback)
+
+    return pd.DataFrame(
+        {
+            "center_id": centers["center_id"].to_numpy(),
+            "period": VOC_PERIOD,
+            "voc_per_1k_jobs": np.round(voc, 2),
+            "comeback_rate": np.round(np.clip(comeback, 0.0, 0.5), 4),
+            "source": "sample",
+        },
+        columns=VOC_COLUMNS,
+    )
 
 
 def _jitter(

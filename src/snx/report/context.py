@@ -20,7 +20,7 @@ def build_analysis_context(settings: Settings) -> pd.DataFrame:
         SELECT
             r.sigungu_code, r.sido, r.sigungu, r.urban_class, r.population,
             r.lat, r.lon,
-            d.annual_visits, d.ev_visits, d.hitech_visits,
+            d.annual_visits, d.ev_visits, d.hitech_visits, d.warranty_visits, d.paid_visits,
             c.nearest_minutes, c.reachable_centers, c.reachable_capacity,
             c.covered_visits, c.uncovered_visits, c.overflow_visits, c.avg_utilization,
             g.unmet_visits, g.gap_score, g.gap_rank
@@ -78,6 +78,7 @@ def region_brief(ctx: pd.DataFrame, sigungu_code: str) -> dict:
         "자사_보유대수": _f(r.get("vehicles_total")),
         "노후차량_비중": _pct(r.get("aged_vehicle_share")),
         "연간_정비수요": _f(r.get("annual_visits")),
+        "보증수리_비중": _pct(_ratio(r.get("warranty_visits"), r.get("annual_visits"))),
         "기존_거점수": int(r.get("center_count", 0)),
         "총_워크베이": int(r.get("total_bays", 0)),
         "최근접_거점_소요시간_분": _f(r.get("nearest_minutes"), 1),
@@ -91,6 +92,12 @@ def region_brief(ctx: pd.DataFrame, sigungu_code: str) -> dict:
         "신규거점_선정여부": bool(pd.notna(r.get("priority"))),
         "신규거점_흡수수요": _f(r.get("captured_visits")),
     }
+
+
+def _ratio(num, den):
+    if num is None or den is None or pd.isna(num) or pd.isna(den) or float(den) == 0:
+        return None
+    return float(num) / float(den)
 
 
 def _f(value, digits: int = 0):

@@ -34,11 +34,19 @@ class MarketSettings(BaseModel):
     ev_share: float = Field(ge=0, le=1)
 
 
+class WarrantyShare(BaseModel):
+    """차령 버킷별 '입고 중 보증수리(무상)로 처리되는 비중'."""
+
+    ice: dict[str, float] = Field(default_factory=dict)
+    ev: dict[str, float] = Field(default_factory=dict)
+
+
 class DemandSettings(BaseModel):
     visits_per_vehicle_year: dict[str, float]
     official_network_loyalty: dict[str, float]
     ev_visit_multiplier: float
     ev_hitech_ratio: float
+    warranty_share: WarrantyShare = WarrantyShare()
 
 
 class CapacitySettings(BaseModel):
@@ -75,6 +83,33 @@ class OptimizationSettings(BaseModel):
     solver_time_limit_sec: int
 
 
+class QualityWeights(BaseModel):
+    wait: float = 0.40
+    voc: float = 0.35
+    comeback: float = 0.25
+
+
+class QualitySettings(BaseModel):
+    base_lead_days: float = 0.5
+    max_wait_days: float = 14.0
+    weights: QualityWeights = QualityWeights()
+    complaint_percentile: float = Field(default=0.85, gt=0, lt=1)
+    grade_cutoffs: tuple[float, float, float] = (25.0, 45.0, 65.0)
+
+
+class InvestmentSettings(BaseModel):
+    budget: float = Field(default=450.0, ge=0)
+    new_site_cost: float = Field(default=30.0, gt=0)
+    bay_expansion_cost: float = Field(default=2.5, gt=0)
+    max_added_bays_per_center: int = Field(default=4, ge=0)
+    cost_unit: str = "억원"
+
+
+class PolicyScenarioSettings(BaseModel):
+    label: str = ""
+    loyalty_overrides: dict[str, float] = Field(default_factory=dict)
+
+
 class ReportSettings(BaseModel):
     top_n_regions: int
     language: str
@@ -92,6 +127,9 @@ class Settings(BaseModel):
     coverage: CoverageSettings
     gap_score: GapScoreSettings
     optimization: OptimizationSettings
+    quality: QualitySettings = QualitySettings()
+    investment: InvestmentSettings = InvestmentSettings()
+    policy_scenario: PolicyScenarioSettings = PolicyScenarioSettings()
     report: ReportSettings
     logging: LoggingSettings = LoggingSettings()
 

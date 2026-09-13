@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import numpy as np
@@ -38,6 +39,58 @@ COVERAGE_COLUMNS = [
 ]
 
 
+@dataclass(frozen=True)
+class Assignment:
+    """지역 × 거점 수요 배정 행렬 — 커버리지 진단과 증설 최적화가 같은 배정을 본다."""
+
+    minutes: np.ndarray          # (n_regions, n_centers) 소요시간
+    reachable: np.ndarray        # (n_regions, n_centers) 접근 기준 이내
+    weights: np.ndarray          # (n_regions, n_centers) Huff 가중치
+    demand: np.ndarray           # (n_regions,) 연간 수요
+    capacity: np.ndarray         # (n_centers,) 연간 처리 용량
+    assigned: np.ndarray         # (n_centers,) 배정 수요
+    overflow_ratio: np.ndarray   # (n_centers,) 배정 수요 중 건전 부하율 초과로 대기가 되는 몫
+
+    @property
+    def overflow_matrix(self) -> np.ndarray:
+        """(n_regions, n_centers) 지역 i 수요 중 거점 j 에서 대기로 남는 양."""
+        return self.weights * self.demand[:, None] * self.overflow_ratio[None, :]
+
+
+def assign_demand(
+    base: pd.DataFrame, centers: pd.DataFrame, settings: Settings
+) -> Assignment:
+    """수요(base: regions × demand)를 접근 가능 거점에 Huff 로 배정한다."""
+    cov = settings.coverage
+    ctr = centers if "capacity" in centers.columns else with_capacity(centers, settings)
+
+    minutes = travel_time_matrix(
+        base["lat"].to_numpy(),
+        base["lon"].to_numpy(),
+        ctr["lat"].to_numpy(),
+        ctr["lon"].to_numpy(),
+        base["urban_class"].to_numpy(),
+        cov.avg_speed_kmh,
+        cov.detour_factor,
+    )
+    reachable = minutes <= cov.max_travel_minutes
+    weights = huff_weights(minutes, reachable, cov.huff_distance_decay)
+
+    demand = base["annual_visits"].fillna(0.0).to_numpy(dtype=float)
+    assigned = (weights * demand[:, None]).sum(axis=0)
+    capacity = ctr["capacity"].to_numpy(dtype=float)
+    healthy = capacity * settings.capacity.healthy_utilization
+
+    # 거점이 감당 가능한 수준을 넘긴 비율 — 그 지점으로 흘러간 수요 중 '대기'로 남는 몫
+    overflow_ratio = np.divide(
+        np.maximum(assigned - healthy, 0.0),
+        assigned,
+        out=np.zeros_like(assigned),
+        where=assigned > 0,
+    )
+    return Assignment(minutes, reachable, weights, demand, capacity, assigned, overflow_ratio)
+
+
 def compute_coverage(
     regions: pd.DataFrame,
     centers: pd.DataFrame,
@@ -50,7 +103,6 @@ def compute_coverage(
     -------
     (coverage_df, center_load_df)
     """
-    cov = settings.coverage
     base = regions.merge(demand, on="sigungu_code", how="left")
     base["annual_visits"] = base["annual_visits"].fillna(0.0)
 
@@ -69,35 +121,10 @@ def compute_coverage(
         return coverage[COVERAGE_COLUMNS], empty_load
 
     ctr = with_capacity(centers, settings)
-
-    minutes = travel_time_matrix(
-        base["lat"].to_numpy(),
-        base["lon"].to_numpy(),
-        ctr["lat"].to_numpy(),
-        ctr["lon"].to_numpy(),
-        base["urban_class"].to_numpy(),
-        cov.avg_speed_kmh,
-        cov.detour_factor,
-    )
-    reachable = minutes <= cov.max_travel_minutes
-    weights = huff_weights(minutes, reachable, cov.huff_distance_decay)
-
-    d_i = base["annual_visits"].to_numpy()[:, None]          # (n_regions, 1)
-    assigned_matrix = weights * d_i                           # (n_regions, n_centers)
-    assigned_j = assigned_matrix.sum(axis=0)                  # (n_centers,)
-
-    capacity_j = ctr["capacity"].to_numpy()
+    a = assign_demand(base, ctr, settings)
+    minutes, reachable, weights = a.minutes, a.reachable, a.weights
+    assigned_j, capacity_j, overflow_ratio_j = a.assigned, a.capacity, a.overflow_ratio
     util_j = utilization(assigned_j, capacity_j)
-    healthy_j = capacity_j * settings.capacity.healthy_utilization
-
-    # 거점이 감당 가능한 수준을 넘긴 비율 — 그 지점으로 흘러간 수요 중 '대기'로 남는 몫
-    with np.errstate(divide="ignore", invalid="ignore"):
-        overflow_ratio_j = np.divide(
-            np.maximum(assigned_j - healthy_j, 0.0),
-            assigned_j,
-            out=np.zeros_like(assigned_j),
-            where=assigned_j > 0,
-        )
 
     covered_share_i = weights.sum(axis=1)                     # 0~1
     uncovered_i = base["annual_visits"].to_numpy() * (1.0 - covered_share_i)

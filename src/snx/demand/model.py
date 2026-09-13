@@ -17,6 +17,16 @@
 이 구조 때문에 "인구는 적지만 차가 늙은 지역"이 수요 상위로 올라온다 —
 서비스망 갭이 실제로 발생하는 지점이며, 판매량 기준 네트워크 배치가
 놓치는 부분이다.
+
+보증수리 분해
+-------------
+같은 입고 1건이라도 보증기간 안이면 회사가 비용을 진다. 차령 버킷별 보증 비중
+ω_a (전기차는 배터리 보증으로 별도 ω^ev_a) 를 곱해 무상/유상 입고를 나눈다.
+
+    W_i = Σ_a ice_visits_ia · ω_a  +  Σ_a ev_visits_ia · ω^ev_a
+
+젊은 차가 많은 대도시는 보증 비용 부담이, 노후차가 많은 지방은 유상 정비
+수요가 크다 — 같은 거점 투자라도 회수 구조가 다르다는 뜻이다.
 """
 
 from __future__ import annotations
@@ -31,13 +41,24 @@ from snx.storage.db import get_conn, read_table, write_df
 
 log = get_logger(__name__)
 
+DEMAND_COLUMNS = [
+    "sigungu_code",
+    "annual_visits",
+    "ice_visits",
+    "ev_visits",
+    "hitech_visits",
+    "warranty_visits",
+    "paid_visits",
+]
+
 
 def estimate_demand(vehicle_parc: pd.DataFrame, settings: Settings) -> pd.DataFrame:
     """차량 모수 → 지역별 연간 정비 입고 수요.
 
     Returns
     -------
-    DataFrame[sigungu_code, annual_visits, ice_visits, ev_visits, hitech_visits]
+    DataFrame[sigungu_code, annual_visits, ice_visits, ev_visits, hitech_visits,
+              warranty_visits, paid_visits]
     """
     d = settings.demand
     unknown = set(vehicle_parc["age_bucket"]) - set(AGE_BUCKETS)
@@ -58,8 +79,13 @@ def estimate_demand(vehicle_parc: pd.DataFrame, settings: Settings) -> pd.DataFr
     df["ice_visits"] = df["ice_vehicles"] * df["rate"] * df["loyalty"]
     df["ev_visits"] = df["ev_vehicles"] * df["rate"] * df["loyalty"] * d.ev_visit_multiplier
 
+    w = d.warranty_share
+    df["warranty_visits"] = df["ice_visits"] * df["age_bucket"].map(w.ice).fillna(0.0) + df[
+        "ev_visits"
+    ] * df["age_bucket"].map(w.ev).fillna(0.0)
+
     agg = (
-        df.groupby("sigungu_code", as_index=False)[["ice_visits", "ev_visits"]]
+        df.groupby("sigungu_code", as_index=False)[["ice_visits", "ev_visits", "warranty_visits"]]
         .sum()
         .assign(
             annual_visits=lambda x: x["ice_visits"] + x["ev_visits"],
@@ -67,9 +93,8 @@ def estimate_demand(vehicle_parc: pd.DataFrame, settings: Settings) -> pd.DataFr
             hitech_visits=lambda x: x["ev_visits"] * d.ev_hitech_ratio,
         )
     )
-    return agg[
-        ["sigungu_code", "annual_visits", "ice_visits", "ev_visits", "hitech_visits"]
-    ].round(1)
+    agg["paid_visits"] = agg["annual_visits"] - agg["warranty_visits"]
+    return agg[DEMAND_COLUMNS].round(1)
 
 
 def demand_drivers(vehicle_parc: pd.DataFrame, settings: Settings) -> pd.DataFrame:
@@ -113,9 +138,11 @@ def run_demand_stage(settings: Settings) -> pd.DataFrame:
     with get_conn(settings.db_path) as conn:
         write_df(conn, demand, "demand")
 
+    total = max(demand["annual_visits"].sum(), 1)
     log.info(
-        "수요 추정 완료 — 전국 연간 %.0f건 (전기차 %.1f%%)",
+        "수요 추정 완료 — 전국 연간 %.0f건 (전기차 %.1f%% · 보증수리 %.1f%%)",
         demand["annual_visits"].sum(),
-        100 * demand["ev_visits"].sum() / max(demand["annual_visits"].sum(), 1),
+        100 * demand["ev_visits"].sum() / total,
+        100 * demand["warranty_visits"].sum() / total,
     )
     return demand
